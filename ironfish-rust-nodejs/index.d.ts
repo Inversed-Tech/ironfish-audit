@@ -35,6 +35,8 @@ export interface NativeSpendDescription {
 export const PROOF_LENGTH: number
 export const TRANSACTION_VERSION: number
 export function verifyTransactions(serializedTransactions: Array<Buffer>): boolean
+export const SPEND_KEY_LENGTH: number
+export const MNEMONIC_LENGTH: number
 export interface Key {
   spending_key: string
   incoming_view_key: string
@@ -160,6 +162,9 @@ export class Transaction {
    */
   post(changeGoesTo: string | undefined | null, intendedTransactionFee: bigint): Buffer
   setExpiration(sequence: number): void
+}
+export class SaplingKey {
+  static wordsSpendingKey(spendingKey: string, languageCode: string): Buffer
 }
 export class FoundBlockResult {
   randomness: string

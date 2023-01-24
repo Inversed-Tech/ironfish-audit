@@ -29,7 +29,15 @@ pub use view_keys::*;
 mod test;
 
 const EXPANDED_SPEND_BLAKE2_KEY: &[u8; 16] = b"Iron Fish Money ";
+
 pub const SPEND_KEY_SIZE: usize = 32;
+type SpendKeyBytes = [u8; SPEND_KEY_SIZE];
+
+// entropy_bits() returns entropy (byte array * 8 = entropy bits) for a given word count
+// MnemonicType::Words24 will be for 32 bytes
+pub const MNEMONIC_SIZE: usize = SPEND_KEY_SIZE;
+type MnemonicBytes = [u8; MNEMONIC_SIZE];
+
 /// A single private key generates multiple other key parts that can
 /// be used to allow various forms of access to a commitment note:
 ///
@@ -40,7 +48,7 @@ pub const SPEND_KEY_SIZE: usize = 32;
 pub struct SaplingKey {
     /// The private (secret) key from which all the other key parts are derived.
     /// The expanded form of this key is required before a note can be spent.
-    spending_key: [u8; SPEND_KEY_SIZE],
+    spending_key: SpendKeyBytes,
 
     /// Part of the expanded form of the spending key, generally referred to as
     /// `ask` in the literature. Derived from spending key using a seeded
@@ -79,7 +87,7 @@ pub struct SaplingKey {
 
 impl SaplingKey {
     /// Construct a new key from an array of bytes
-    pub fn new(spending_key: [u8; SPEND_KEY_SIZE]) -> Result<Self, IronfishError> {
+    pub fn new(spending_key: SpendKeyBytes) -> Result<Self, IronfishError> {
         let spend_authorizing_key =
             jubjub::Fr::from_bytes_wide(&Self::convert_key(spending_key, 0));
 
@@ -154,7 +162,7 @@ impl SaplingKey {
     /// first time.
     /// Note that unlike `new`, this function always successfully returns a value.
     pub fn generate_key() -> Self {
-        let spending_key: [u8; SPEND_KEY_SIZE] = random();
+        let spending_key: SpendKeyBytes = random();
         loop {
             if let Ok(key) = Self::new(spending_key) {
                 return key;
@@ -178,7 +186,7 @@ impl SaplingKey {
     }
 
     /// Retrieve the private spending key
-    pub fn spending_key(&self) -> [u8; SPEND_KEY_SIZE] {
+    pub fn spending_key(&self) -> SpendKeyBytes {
         self.spending_key
     }
 
@@ -194,11 +202,15 @@ impl SaplingKey {
     /// a seed. This isn't strictly necessary for private key, but view keys
     /// will need a direct mapping. The private key could still be generated
     /// using bip-32 and bip-39 if desired.
-    pub fn words_spending_key(&self, language_code: &str) -> Result<String, IronfishError> {
+    pub fn words_spending_key(
+        spending_key: SpendKeyBytes,
+        language_code: &str,
+    ) -> Result<MnemonicBytes, IronfishError> {
         let language = Language::from_language_code(language_code)
             .ok_or(IronfishError::InvalidLanguageEncoding)?;
-        let mnemonic = Mnemonic::from_entropy(&self.spending_key, language).unwrap();
-        Ok(mnemonic.phrase().to_string())
+        let mnemonic = Mnemonic::from_entropy(&spending_key, language)
+            .map_err(|_| IronfishError::InvalidEntropy)?;
+        mnemonic.phrase().as_bytes().try_into().map_err(|_| IronfishError::InvalidMnemonicSize)
     }
 
     /// Retrieve the publicly visible outgoing viewing key
@@ -248,7 +260,7 @@ impl SaplingKey {
     ///  *  `spending_key` The 32 byte spending key
     ///  *  `modifier` a byte to add to tweak the hash for each of the three
     ///     values
-    fn convert_key(spending_key: [u8; SPEND_KEY_SIZE], modifier: u8) -> [u8; 64] {
+    fn convert_key(spending_key: SpendKeyBytes, modifier: u8) -> [u8; 64] {
         let mut hasher = Blake2b::new()
             .hash_length(64)
             .personal(EXPANDED_SPEND_BLAKE2_KEY)
