@@ -820,3 +820,93 @@ pub fn batch_verify_transactions<'a>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        Note, ProposedTransaction, SaplingKey,
+        assets::asset::{
+            Asset, NATIVE_ASSET, NATIVE_ASSET_GENERATOR
+        },
+    };
+
+    #[test]
+    fn test_malleable_asset_ids_native_mint() {
+        let spender_key = SaplingKey::generate_key();
+
+        let value: u64 = 100;
+
+        let out_note_1 = Note::new(
+            spender_key.public_address(),
+            value as u64,
+            "Native asset output",
+            NATIVE_ASSET_GENERATOR,
+            spender_key.public_address(),
+        );
+
+        let out_note_2 = Note::new(
+            spender_key.public_address(),
+            value as u64,
+            "Different asset output",
+            -NATIVE_ASSET_GENERATOR,
+            spender_key.public_address(),
+        );
+
+        let mut transaction = ProposedTransaction::new(spender_key);
+        transaction.add_output(out_note_1).unwrap();
+        transaction.add_output(out_note_2).unwrap();
+        assert_eq!(transaction.spends.len(), 0);
+        assert_eq!(transaction.outputs.len(), 2);
+
+        // the native asset value balance is zeroed to override an automatic fee computation done
+        // when computing the value balance point of the transaction for the binding signature key
+        transaction.value_balances.add(&NATIVE_ASSET, value as i64).unwrap();
+
+        let public_transaction = transaction
+            ._partial_post()
+            .expect("should be able to post transaction");
+        let verify_result = public_transaction.verify();
+        assert!(verify_result.is_err())
+    }
+
+    #[test]
+    fn test_malleable_asset_ids_general_mint() {
+        let spender_key = SaplingKey::generate_key();
+
+        let some_asset = Asset::new(
+            spender_key.public_address(),
+            "Testcoin",
+            "A really cool coin",
+        ).expect("should be able to create asset");
+
+        let value: u64 = 100;
+
+        let out_note_1 = Note::new(
+            spender_key.public_address(),
+            value as u64,
+            "Arbitrary asset output",
+            some_asset.generator(),
+            spender_key.public_address(),
+        );
+
+        let out_note_2 = Note::new(
+            spender_key.public_address(),
+            value as u64,
+            "Different asset output",
+            -some_asset.generator(),
+            spender_key.public_address(),
+        );
+
+        let mut transaction = ProposedTransaction::new(spender_key);
+        transaction.add_output(out_note_1).unwrap();
+        transaction.add_output(out_note_2).unwrap();
+        assert_eq!(transaction.spends.len(), 0);
+        assert_eq!(transaction.outputs.len(), 2);
+
+        let public_transaction = transaction
+            ._partial_post()
+            .expect("should be able to post transaction");
+        let verify_result = public_transaction.verify();
+        assert!(verify_result.is_err())
+    }
+}
