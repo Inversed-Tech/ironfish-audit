@@ -2,11 +2,27 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use crate::keys::{ephemeral::EphemeralKeyPair, PUBLIC_ADDRESS_SIZE};
 
-use super::{shared_secret, PublicAddress, SaplingKey};
-use group::Curve;
-use jubjub::ExtendedPoint;
+use super::EXPANDED_SPEND_BLAKE2_KEY;
+use crate::keys::{
+    PUBLIC_ADDRESS_SIZE,
+    SaplingKey,
+    ephemeral::EphemeralKeyPair,
+    public_address::PublicAddress,
+    view_keys::shared_secret,
+};
+
+use ironfish_zkp::constants::{
+    PROOF_GENERATION_KEY_GENERATOR,
+    SPENDING_KEY_GENERATOR,
+    CRH_IVK_PERSONALIZATION,
+    PUBLIC_KEY_GENERATOR,
+};
+
+use group::{Curve, GroupEncoding};
+use jubjub::{ExtendedPoint};
+use blake2b_simd::Params as Blake2b;
+use blake2s_simd::Params as Blake2s;
 
 #[test]
 fn test_key_generation_and_construction() {
@@ -15,6 +31,123 @@ fn test_key_generation_and_construction() {
     assert!(key.spending_key != [0; 32]);
     assert!(key2.spending_key == key.spending_key);
     assert!(key2.incoming_viewing_key.view_key == key.incoming_viewing_key.view_key);
+}
+
+#[test]
+fn test_sk_to_ask() {
+    let key = SaplingKey::generate_key();
+    let sk = key.spending_key;
+    let ask = key.spend_authorizing_key;
+
+    let mut hasher = Blake2b::new()
+        .hash_length(64)
+        .personal(EXPANDED_SPEND_BLAKE2_KEY)
+        .to_state();
+    hasher.update(&sk);
+    hasher.update(&[0]);
+
+    let mut hash_result = [0; 64];
+    hash_result[0..64].clone_from_slice(&hasher.finalize().as_ref()[0..64]);
+
+    let computed_ask = jubjub::Fr::from_bytes_wide(&hash_result);
+
+    assert_eq!(ask, computed_ask);
+}
+
+#[test]
+fn test_sk_to_nsk() {
+    let key = SaplingKey::generate_key();
+    let sk = key.spending_key;
+    let nsk = key.proof_authorizing_key;
+
+    let mut hasher = Blake2b::new()
+        .hash_length(64)
+        .personal(EXPANDED_SPEND_BLAKE2_KEY)
+        .to_state();
+    hasher.update(&sk);
+    hasher.update(&[1]);
+
+    let mut hash_result = [0; 64];
+    hash_result[0..64].clone_from_slice(&hasher.finalize().as_ref()[0..64]);
+
+    let computed_nsk = jubjub::Fr::from_bytes_wide(&hash_result);
+
+    assert_eq!(nsk, computed_nsk);
+}
+
+#[test]
+fn test_sk_to_ovk() {
+    let key = SaplingKey::generate_key();
+    let sk = key.spending_key;
+    let ovk = key.outgoing_viewing_key.view_key;
+
+    let mut hasher = Blake2b::new()
+        .hash_length(64)
+        .personal(EXPANDED_SPEND_BLAKE2_KEY)
+        .to_state();
+    hasher.update(&sk);
+    hasher.update(&[2]);
+
+    let mut computed_ovk = [0; 32];
+    computed_ovk[0..32].clone_from_slice(&hasher.finalize().as_ref()[0..32]);
+
+    assert_eq!(ovk, computed_ovk);
+}
+
+#[test]
+fn test_ask_to_ak() {
+    let key = SaplingKey::generate_key();
+    let ask = key.spend_authorizing_key;
+    let ak = key.authorizing_key;
+
+    let computed_ak = SPENDING_KEY_GENERATOR * ask;
+
+    assert_eq!(ak, computed_ak);
+}
+
+#[test]
+fn test_nsk_to_nk() {
+    let key = SaplingKey::generate_key();
+    let nsk = key.proof_authorizing_key;
+    let nk = key.nullifier_deriving_key;
+
+    let computed_nk = PROOF_GENERATION_KEY_GENERATOR * nsk;
+
+    assert_eq!(nk, computed_nk);
+}
+
+#[test]
+fn test_ak_nk_to_ivk() {
+    let key = SaplingKey::generate_key();
+    let ak = key.authorizing_key;
+    let nk = key.nullifier_deriving_key;
+    let ivk = key.incoming_viewing_key.view_key;
+
+    let mut hasher = Blake2s::new()
+        .hash_length(32)
+        .personal(CRH_IVK_PERSONALIZATION)
+        .to_state();
+    hasher.update(&ak.to_bytes());
+    hasher.update(&nk.to_bytes());
+
+    let mut hash_result = [0; 32];
+    hash_result.clone_from_slice(&hasher.finalize().as_ref()[0..32]);
+
+    hash_result[31] &= 0b0000_0111;
+    let computed_ivk = jubjub::Fr::from_bytes(&hash_result).unwrap();
+
+    assert_eq!(ivk, computed_ivk);
+}
+
+#[test]
+fn test_ivk_to_pk() {
+    let key = SaplingKey::generate_key();
+    let ivk = key.incoming_viewing_key.view_key;
+    let pk = key.public_address().transmission_key;
+
+    let computed_pk = PUBLIC_KEY_GENERATOR * ivk;
+
+    assert_eq!(pk, computed_pk);
 }
 
 #[test]
