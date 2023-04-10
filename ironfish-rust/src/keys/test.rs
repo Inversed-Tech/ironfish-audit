@@ -34,35 +34,42 @@ fn test_diffie_hellman_shared_key() {
 
 #[test]
 fn test_diffie_hellman_shared_key_with_other_key() {
-    let key = SaplingKey::generate_key();
-    let third_party_key = SaplingKey::generate_key();
+    let key1 = SaplingKey::generate_key();
+    let secret_key_1 = &key1.incoming_viewing_key.view_key;
+    let public_key_1 = &key1.public_address().transmission_key;
 
-    let address = key.public_address();
-    let third_party_address = third_party_key.public_address();
+    let key2 = SaplingKey::generate_key();
+    let secret_key_2 = &key2.incoming_viewing_key.view_key;
+    let public_key_2 = &key2.public_address().transmission_key;
 
-    let key_pair = EphemeralKeyPair::new();
-    let secret_key = key_pair.secret();
-    let public_key = key_pair.public();
+    let eph_keypair = EphemeralKeyPair::new();
+    let eph_secret_key = eph_keypair.secret();
+    let eph_public_key = eph_keypair.public();
 
-    let shared_secret1 = shared_secret(secret_key, &address.transmission_key, public_key);
-    let shared_secret2 = shared_secret(&key.incoming_viewing_key.view_key, public_key, public_key);
-    assert_eq!(shared_secret1, shared_secret2);
+    let shared_secret_1a = shared_secret(
+        eph_secret_key,
+        public_key_1,
+        eph_public_key);
+    let shared_secret_1b = shared_secret(
+        secret_key_1,
+        eph_public_key,
+        eph_public_key);
+    assert_eq!(shared_secret_1a, shared_secret_1b);
 
-    let shared_secret_third_party1 = shared_secret(
-        secret_key,
-        &third_party_address.transmission_key,
-        public_key,
+    let shared_secret_2a = shared_secret(
+        eph_secret_key,
+        public_key_2,
+        eph_public_key,
     );
-    assert_ne!(shared_secret1, shared_secret_third_party1);
-    assert_ne!(shared_secret2, shared_secret_third_party1);
-
-    let shared_secret_third_party2 = shared_secret(
-        &third_party_key.incoming_viewing_key.view_key,
-        public_key,
-        public_key,
+    let shared_secret_2b = shared_secret(
+        secret_key_2,
+        eph_public_key,
+        eph_public_key,
     );
-    assert_ne!(shared_secret1, shared_secret_third_party2);
-    assert_ne!(shared_secret2, shared_secret_third_party2);
+    assert_eq!(shared_secret_2a, shared_secret_2b);
+
+    // shared secrets generated for an ephemeral key for different Sapling keys should be different
+    assert_ne!(shared_secret_1a, shared_secret_2a);
 }
 
 #[test]
