@@ -9,7 +9,11 @@ use crate::keys::{
     SaplingKey,
     ephemeral::EphemeralKeyPair,
     public_address::PublicAddress,
-    view_keys::shared_secret,
+    view_keys::{
+        IncomingViewKey,
+        OutgoingViewKey,
+        shared_secret,
+    },
 };
 
 use ironfish_zkp::constants::{
@@ -206,7 +210,7 @@ fn test_diffie_hellman_shared_key_with_other_key() {
 }
 
 #[test]
-fn test_serialization() {
+fn test_key_serialization() {
     let key = SaplingKey::generate_key();
     let mut serialized_key = [0; PUBLIC_ADDRESS_SIZE];
     key.write(&mut serialized_key[..])
@@ -220,6 +224,13 @@ fn test_serialization() {
         key.incoming_view_key().view_key
     );
 
+    let mut incorrect_size_buffer = [0; PUBLIC_ADDRESS_SIZE - 1];
+    assert!(key.write(&mut incorrect_size_buffer[..]).is_err());
+}
+
+#[test]
+fn test_public_address_serialization() {
+    let key = SaplingKey::generate_key();
     let public_address = key.public_address();
     let mut serialized_address = [0; PUBLIC_ADDRESS_SIZE];
     public_address
@@ -232,7 +243,15 @@ fn test_serialization() {
     assert_eq!(
         ExtendedPoint::from(read_back_address.transmission_key).to_affine(),
         ExtendedPoint::from(public_address.transmission_key).to_affine()
-    )
+    );
+
+    let read_back_address: PublicAddress = PublicAddress::read(&mut serialized_address.as_ref())
+        .expect("Should be able to read address from valid bytes");
+
+    assert_eq!(
+        ExtendedPoint::from(read_back_address.transmission_key).to_affine(),
+        ExtendedPoint::from(public_address.transmission_key).to_affine()
+    );
 }
 
 #[test]
@@ -244,11 +263,60 @@ fn test_hex_conversion() {
     let second_key = SaplingKey::from_hex(&hex).unwrap();
     assert_eq!(second_key.spending_key, key.spending_key);
 
+    assert!(SaplingKey::from_hex("invalid").is_err());
+    assert!(SaplingKey::from_hex("01234567").is_err());
+
     let address = key.public_address();
     let hex = address.hex_public_address();
     assert_eq!(hex.len(), 2 * PUBLIC_ADDRESS_SIZE);
     let second_address = PublicAddress::from_hex(&hex).unwrap();
     assert_eq!(second_address, address);
 
-    assert!(PublicAddress::from_hex("invalid").is_err());
+    assert!(PublicAddress::from_hex("incorrect length").is_err());
+    assert!(PublicAddress::from_hex(
+        "correct length however not a valid string of hexadecimal digits."
+    ).is_err());
+}
+
+#[test]
+fn test_word_conversion() {
+    let key = SaplingKey::generate_key();
+    let language_code = "en";
+
+    // Test secret key conversion
+
+    let sk_mnemonic = key.words_spending_key(language_code)
+        .expect("should be able to generate bip-39 mnemonic");
+    let read_back_key = SaplingKey::from_words(language_code, sk_mnemonic)
+        .expect("should be able to read back key from bip-39 mnemonic");
+    assert_eq!(key.incoming_view_key().view_key, read_back_key.incoming_view_key().view_key);
+
+    // Test incoming view key conversion
+
+    let ivk = key.incoming_view_key();
+    let ivk_mnemonic = ivk.words_key(language_code)
+        .expect("should be able to generate bip-39 mnemonic");
+    let read_back_key = IncomingViewKey::from_words(language_code, ivk_mnemonic)
+        .expect("should be able to read back key from bip-39 mnemonic");
+    assert_eq!(ivk.view_key, read_back_key.view_key);
+
+    // Test outgoing view key conversion
+
+    let ovk = key.outgoing_view_key();
+    let ovk_mnemonic = ovk.words_key(language_code)
+        .expect("should be able to generate bip-39 mnemonic");
+    let read_back_key = OutgoingViewKey::from_words(language_code, ovk_mnemonic)
+        .expect("should be able to read back key from bip-39 mnemonic");
+    assert_eq!(ovk.view_key, read_back_key.view_key);
+
+    // Test error on invalid language code
+
+    let bad_language_code = "invalid_lang";
+
+    let sk_mnemonic_err = key.words_spending_key(bad_language_code);
+    assert!(sk_mnemonic_err.is_err());
+    let ivk_mnemonic_err = ivk.words_key(bad_language_code);
+    assert!(ivk_mnemonic_err.is_err());
+    let ovk_mnemonic_err = ovk.words_key(bad_language_code);
+    assert!(ovk_mnemonic_err.is_err());
 }
