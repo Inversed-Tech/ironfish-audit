@@ -610,7 +610,7 @@ describe('PeerNetwork', () => {
         expect(addPendingTransaction).toHaveBeenCalledTimes(1)
       })
 
-      it('does not sync or gossip double-spent transactions', async () => {
+      it('does not sync or gossip double-spent transactions MODIFIED', async () => {
         const { peerNetwork, node } = nodeTest
         const { wallet, memPool, chain } = node
 
