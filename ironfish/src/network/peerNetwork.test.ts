@@ -18,7 +18,12 @@ import {
   useBlockWithTx,
   useMinerBlockFixture,
   useMinersTxFixture,
+  usePostTxFixture,
 } from '../testUtilities'
+import {
+  createInlineDoubleSpendTransaction,
+} from '../testUtilities/helpers/transaction'
+import { Asset } from '@ironfish/rust-nodejs'
 import { mockChain, mockNode, mockTelemetry } from '../testUtilities/mocks'
 import { createNodeTest } from '../testUtilities/nodeTest'
 import { parseNetworkMessage } from './messageRegistry'
@@ -1054,6 +1059,97 @@ describe('PeerNetwork', () => {
         expect(sendSpy).not.toHaveBeenCalled()
       })
 
+      /**
+       * We say that a transaction has an "inline double-spend" if it contains
+       * multiple spends producing the same nullifier.  Such a transaction is
+       * never valid, but currently there are a few places where an inline
+       * double-spend transaction is still processed (at the node and P2p
+       * level, not on the blockchain) by network nodes without being
+       * recognized as invalid.
+       * 
+       * The following test demonstrates that an inline double-spend
+       * transaction received from a network peer is processed as a valid
+       * transaction: it is added to the node's mempool, and it is repeated
+       * to other network peers.  Ideally, a transaction of this sort
+       * received from the network would be ignored entirely, as it is
+       * impossible for it to ever be added to the blockchain.
+       * 
+       * The test is written to pass to demonstrate the current node behavior
+       * in this setting.
+       */
+      it('does (!) sync or gossip transactions with inline double-spends', async () => {
+        const { peerNetwork, node } = nodeTest
+        const { wallet, memPool, chain } = node
+
+        chain.synced = true
+
+        const accountA = await useAccountFixture(wallet, 'accountA')
+        const accountB = await useAccountFixture(wallet, 'accountB')
+
+
+        // add miner fee block to fund new transaction with positive value note
+
+        const minerFeeBlock = await useMinerBlockFixture(node.chain, undefined, accountA, wallet)
+        await expect(chain).toAddBlock(minerFeeBlock)
+        await wallet.updateHead()
+
+
+        // watch for indications that a transaction has been circulated on the network
+
+        const peers = getConnectedPeersWithSpies(peerNetwork.peerManager, 5)
+        const { peer: peerWithTransaction } = peers[0]
+        const peersWithoutTransaction = peers.slice(1)
+
+        const verifyNewTransactionSpy = jest.spyOn(node.chain.verifier, 'verifyNewTransaction')
+        const addPendingTransaction = jest.spyOn(node.wallet, 'addPendingTransaction')
+        const acceptTransaction = jest.spyOn(node.memPool, 'acceptTransaction')
+
+        // construct transaction with inline double-spend of a single note
+
+        const transaction = await createInlineDoubleSpendTransaction(accountA, accountB, chain)
+
+        // confirm that transaction wasn't accidentally added to the mempool during construction
+
+        expect(memPool.exists(transaction.hash())).toBe(false)
+        expect(acceptTransaction).not.toHaveBeenCalled()
+
+        // receive transaction from network
+
+        await peerNetwork.peerManager.onMessage.emitAsync(
+          peerWithTransaction,
+          new NewTransactionsMessage([transaction]),
+        )
+
+        // confirm other peers have been sent invalid transaction
+
+        for (const { sendSpy } of peersWithoutTransaction) {
+          expect(sendSpy).toHaveBeenCalled()
+        }
+
+        // confirm transaction appears valid
+
+        expect(verifyNewTransactionSpy).toHaveBeenCalledTimes(1)
+        const verificationResult = await verifyNewTransactionSpy.mock.results[0].value
+        expect(verificationResult).toEqual({
+          valid: true,
+        })
+
+        // confirm bad transaction with inline double-spend got into the mempool
+
+        expect(memPool.exists(transaction.hash())).toBe(true)
+        expect(acceptTransaction).toHaveBeenCalled()
+        expect(addPendingTransaction).toHaveBeenCalled()
+
+        // confirm all peers have the transaction marked
+
+        for (const { peer } of peers) {
+          expect(peer.state.identity).not.toBeNull()
+          peer.state.identity &&
+            expect(peerNetwork.knowsTransaction(transaction.hash(), peer.state.identity)
+              ).toBe(true)
+        }
+      })
+      
       it('syncs transactions if the spends reference a larger tree size', async () => {
         const { peerNetwork, node } = nodeTest
         const { wallet, memPool, chain } = node
