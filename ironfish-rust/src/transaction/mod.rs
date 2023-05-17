@@ -260,7 +260,7 @@ impl ProposedTransaction {
     }
 
     // Post transaction without much validation.
-    fn _partial_post(&self) -> Result<Transaction, IronfishError> {
+    pub fn _partial_post(&self) -> Result<Transaction, IronfishError> {
         // Generate randomized public key
 
         // The public key after randomization has been applied. This is used

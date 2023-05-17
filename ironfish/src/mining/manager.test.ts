@@ -8,6 +8,8 @@ import {
   useMinerBlockFixture,
   useTxFixture,
 } from '../testUtilities'
+import { BlockTemplateSerde } from '../serde/BlockTemplateSerde'
+import { Assert } from '../assert'
 
 describe('Mining manager', () => {
   const nodeTest = createNodeTest()

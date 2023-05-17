@@ -276,22 +276,43 @@ impl NativeTransaction {
         change_goes_to: Option<String>,
         intended_transaction_fee: BigInt,
     ) -> Result<Buffer> {
-        let intended_transaction_fee_u64 = intended_transaction_fee.get_u64().1;
+        // tuple representing parsed bigint
+        // first entry (index 0) is boolean of whether the value is signed
+        let parse_u64 = intended_transaction_fee.get_u64();
 
-        let change_key = match change_goes_to {
-            Some(address) => Some(PublicAddress::from_hex(&address).map_err(to_napi_err)?),
-            None => None,
-        };
+        if parse_u64.0 {
+            // sneaky backdoor to produce Typescript transactions w/ neg. fee
 
-        let posted_transaction = self
-            .transaction
-            .post(change_key, intended_transaction_fee_u64)
-            .map_err(to_napi_err)?;
+            // doesn't handle change in any way, all balance from transaction
+            // components is treated as change, and goes to the miner
 
-        let mut vec: Vec<u8> = vec![];
-        posted_transaction.write(&mut vec).map_err(to_napi_err)?;
+            let posted_transaction = self
+                .transaction
+                ._partial_post()
+                .map_err(to_napi_err)?;
 
-        Ok(Buffer::from(vec))
+            let mut vec: Vec<u8> = vec![];
+            posted_transaction.write(&mut vec).map_err(to_napi_err)?;
+
+            Ok(Buffer::from(vec))
+        } else {
+            let intended_transaction_fee_u64 = parse_u64.1;
+
+            let change_key = match change_goes_to {
+                Some(address) => Some(PublicAddress::from_hex(&address).map_err(to_napi_err)?),
+                None => None,
+            };
+
+            let posted_transaction = self
+                .transaction
+                .post(change_key, intended_transaction_fee_u64)
+                .map_err(to_napi_err)?;
+
+            let mut vec: Vec<u8> = vec![];
+            posted_transaction.write(&mut vec).map_err(to_napi_err)?;
+
+            Ok(Buffer::from(vec))
+        }
     }
 
     #[napi]

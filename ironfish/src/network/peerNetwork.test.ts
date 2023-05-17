@@ -19,6 +19,7 @@ import {
   useMinerBlockFixture,
   useMinersTxFixture,
 } from '../testUtilities'
+import { createNegativeFeeTransaction } from '../testUtilities/helpers/transaction'
 import { mockChain, mockNode, mockTelemetry } from '../testUtilities/mocks'
 import { createNodeTest } from '../testUtilities/nodeTest'
 import { parseNetworkMessage } from './messageRegistry'
@@ -1054,6 +1055,84 @@ describe('PeerNetwork', () => {
         expect(sendSpy).not.toHaveBeenCalled()
       })
 
+      /**
+       * This test verifies that a network node will not accept a transaction
+       * from the network which specifies a negative transaction fee, and
+       * will not forward such a transaction to other peer nodes.
+       */
+      it('does not sync or gossip transactions with negative fee', async () => {
+        const { peerNetwork, node } = nodeTest
+        const { wallet, memPool, chain } = node
+
+        chain.synced = true
+
+        const peers = getConnectedPeersWithSpies(peerNetwork.peerManager, 5)
+        const { peer: peerWithTransaction } = peers[0]
+        const peersWithoutTransaction = peers.slice(1)
+
+        const acceptTransaction = jest.spyOn(node.memPool, 'acceptTransaction')
+        const verifyNewTransactionSpy = jest.spyOn(node.chain.verifier, 'verifyNewTransaction')
+
+        const accountA = await useAccountFixture(wallet, 'accountA')
+        const accountB = await useAccountFixture(wallet, 'accountB')
+
+        // add miner fee block to fund new transaction with nontrivial note
+
+        const minerFeeBlock = await useMinerBlockFixture(node.chain, undefined, accountA, wallet)
+        await expect(chain).toAddBlock(minerFeeBlock)
+        await wallet.updateHead()
+
+        // verify that no other transactions are added to wallet
+
+        const addPendingTransaction = jest.spyOn(node.wallet, 'addPendingTransaction')
+
+        // construct transaction with inline double-spend of a single note
+
+        const transaction = await createNegativeFeeTransaction(accountA, accountB, -1n, chain, {addSpend: true})
+
+        // confirm that transaction wasn't accidentally added to the mempool during construction
+
+        expect(memPool.exists(transaction.hash())).toBe(false)
+        expect(acceptTransaction).not.toHaveBeenCalled()
+
+        // receive transaction from network
+
+        await peerNetwork.peerManager.onMessage.emitAsync(
+          peerWithTransaction,
+          new NewTransactionsMessage([transaction]),
+        )
+
+        // confirm other peers have not been sent invalid transaction
+
+        for (const { sendSpy } of peersWithoutTransaction) {
+          expect(sendSpy).not.toHaveBeenCalled()
+        }
+
+        // confirm transaction appears invalid
+
+        expect(verifyNewTransactionSpy).toHaveBeenCalledTimes(1)
+        const verificationResult = await verifyNewTransactionSpy.mock.results[0].value
+        expect(verificationResult).toEqual({
+          valid: false,
+          reason: "Transaction fee is below the minimum required fee",
+        })
+
+        // confirm bad transaction with inline double-spend got into the mempool
+
+        expect(memPool.exists(transaction.hash())).toBe(false)
+        expect(acceptTransaction).not.toHaveBeenCalled()
+        expect(addPendingTransaction).not.toHaveBeenCalled()
+
+        // confirm all peers have the transaction unmarked
+
+        for (const { peer } of peersWithoutTransaction) {
+          expect(peer.state.identity).not.toBeNull()
+          peer.state.identity &&
+            expect(peerNetwork.knowsTransaction(transaction.hash(), peer.state.identity)
+              ).toBe(false)
+        }
+      })
+      
       it('syncs transactions if the spends reference a larger tree size', async () => {
         const { peerNetwork, node } = nodeTest
         const { wallet, memPool, chain } = node
