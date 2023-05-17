@@ -7,7 +7,15 @@ import {
   useAccountFixture,
   useMinerBlockFixture,
   useTxFixture,
+  usePostTxFixture,
 } from '../testUtilities'
+import {
+  createPureMintTransaction,
+} from '../testUtilities/helpers/transaction'
+import { MINED_RESULT } from './manager'
+import { BlockTemplateSerde } from '../serde/BlockTemplateSerde'
+import { Assert } from '../assert'
+import { Asset } from '@ironfish/rust-nodejs'
 
 describe('Mining manager', () => {
   const nodeTest = createNodeTest()
@@ -82,5 +90,53 @@ describe('Mining manager', () => {
       .blockTransactions
     expect(results).toHaveLength(1)
     expect(results[0].hash().compare(transaction.hash())).toBe(0)
+  })
+
+  it('does submit mint transaction with no fee to miners', async () => {
+    const { chain, node, wallet } = nodeTest
+    const { miningManager, memPool } = node
+
+    // set up accounts, including a default account to enable mining
+
+    await nodeTest.node.wallet.createAccount('account', true)
+    const account = await useAccountFixture(wallet)
+    const recipient = await useAccountFixture(wallet, 'recipient')
+
+    // generate an initial posted transaction with a new custom asset type
+
+    const asset = new Asset(account.spendingKey, 'TestCoin', 'metadata')
+    const mintData = {
+      name: asset.name().toString('utf8'),
+      metadata: asset.metadata().toString('utf8'),
+      value: 10n,
+    }
+
+    const mint1 = await usePostTxFixture({
+      node: node,
+      wallet: wallet,
+      from: account,
+      mints: [mintData],
+    })
+
+    // add block with above transaction to register the asset type on chain
+
+    const block2 = await useMinerBlockFixture(
+      node.chain, undefined, undefined, undefined,
+      [mint1]
+    )
+    await expect(chain).toAddBlock(block2)
+    await wallet.updateHead()
+
+    // construct a block template with a pure mint transaction from the memory pool
+
+    const transaction = await createPureMintTransaction(account, recipient, asset, 100n)
+    memPool.acceptTransaction(transaction)
+    const blockTemplate3 = await miningManager.createNewBlockTemplate(block2)
+
+    // submit block template with pure mint transaction to the miner RPC
+
+    await expect(miningManager.submitBlockTemplate(blockTemplate3)).resolves.toBe(
+      MINED_RESULT.SUCCESS
+    )
   })
 })

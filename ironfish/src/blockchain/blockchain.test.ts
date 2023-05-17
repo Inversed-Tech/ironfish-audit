@@ -21,6 +21,9 @@ import {
   usePostTxFixture,
   useTxFixture,
 } from '../testUtilities'
+import {
+  createPureMintTransaction,
+} from '../testUtilities/helpers/transaction'
 import { AsyncUtils } from '../utils'
 import { Account } from '../wallet'
 
@@ -798,6 +801,57 @@ describe('Blockchain', () => {
       isAdded: false,
       reason: VerificationResultReason.DOUBLE_SPEND,
     })
+  })
+
+  /**
+   * The following test confirms that the blockchain will accept multiple
+   * instances of the same transaction 
+   */
+  it('accepts (!) replay of pure mint transactions with zero fee', async () => {
+    const { node, chain } = await nodeTest.createSetup()
+    const { wallet } = node
+
+    const accountA = await useAccountFixture(wallet, 'accountA')
+    const accountB = await useAccountFixture(wallet, 'accountB')
+
+    // generate an initial posted transaction which registers a new custom asset
+
+    const asset = new Asset(accountA.spendingKey, 'TestCoin', 'metadata')
+    const mintData = {
+      name: asset.name().toString('utf8'),
+      metadata: asset.metadata().toString('utf8'),
+      value: 10n,
+    }
+
+    const mint1 = await usePostTxFixture({
+      node: node,
+      wallet: wallet,
+      from: accountA,
+      mints: [mintData],
+    })
+
+    // add block with new asset to register the asset type on chain
+
+    const block2 = await useMinerBlockFixture(
+      node.chain, undefined, undefined, undefined,
+      [mint1]
+    )
+    await expect(chain).toAddBlock(block2)
+    await wallet.updateHead()
+
+    // create a separate transaction with only a mint and an output
+
+    const mint2 = await createPureMintTransaction(accountA, accountB, asset, 100n)
+
+    // spend the transaction for the first time
+
+    const block3 = await useMinerBlockFixture(node.chain, undefined, undefined, undefined, [mint2])
+    await expect(chain).toAddBlock(block3)
+
+    // spend the transaction a second time
+
+    const block4 = await useMinerBlockFixture(node.chain, undefined, undefined, undefined, [mint2])
+    await expect(chain).toAddBlock(block4)
   })
 
   it('rejects double spend during reorg', async () => {
