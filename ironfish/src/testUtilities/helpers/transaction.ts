@@ -185,3 +185,57 @@ export async function createInlineDoubleSpendTransaction(
 
   return transaction
 }
+
+/**
+ * Produces a transaction that has one mint and one output, no spends and no burns,
+ * and zero transaction fee.
+ */
+export async function createPureMintTransaction(
+  from: Account,
+  to: Account,
+  asset: Asset,
+  amount: bigint,
+  options: {
+    expiration?: number
+  } = { expiration: 0 },
+): Promise<Transaction> {
+  // construct raw transaction
+
+  const raw = new RawTransaction()
+    raw.expiration = options.expiration ?? 0
+    raw.fee = 0n
+
+  // add a Mint to the transaction
+
+  raw.mints.push({
+    name: asset.name().toString('utf8'),
+    metadata: asset.metadata().toString('utf8'),
+    value: amount,
+  })
+
+  // add an Output for the minted amount
+
+  const outputNote = new NativeNote(
+    to.publicAddress,
+    amount,
+    'Test note for a pure mint transaction',
+    asset.id(),
+    from.publicAddress,
+  )
+
+  raw.outputs.push({ note: new Note(outputNote.serialize()) })
+
+  // create posted transaction
+
+  const transaction = raw.post(from.spendingKey || '')
+
+  // confirm that transaction has the desired properties
+
+  Assert.isEqual(transaction.spends.length, 0)
+  Assert.isEqual(transaction.notes.length, 1)
+  Assert.isEqual(transaction.mints.length, 1)
+  Assert.isEqual(transaction.burns.length, 0)
+  Assert.isEqual(transaction.fee(), BigInt(0))
+
+  return transaction
+}

@@ -22,6 +22,7 @@ import {
 } from '../testUtilities'
 import {
   createInlineDoubleSpendTransaction,
+  createPureMintTransaction,
 } from '../testUtilities/helpers/transaction'
 import { Asset } from '@ironfish/rust-nodejs'
 import { mockChain, mockNode, mockTelemetry } from '../testUtilities/mocks'
@@ -1146,6 +1147,114 @@ describe('PeerNetwork', () => {
           expect(peer.state.identity).not.toBeNull()
           peer.state.identity &&
             expect(peerNetwork.knowsTransaction(transaction.hash(), peer.state.identity)
+              ).toBe(true)
+        }
+      })
+
+      /**
+       * We say that a transaction is a "pure mint" transaction if the inputs
+       * to the transaction consist only of Mint operations, without spending
+       * any existing notes.  Since nodes cannot mint the native asset used for
+       * network fees, such a transaction has non-positive fee.
+       * 
+       * The following test demonstrates that a pure mint transaction minting
+       * a custom asset and producing a note for a separate account is accepted
+       * from the network, added to the mempool, and repeated to other peers.
+       */
+      it('does sync or gossip a pure mint transaction with zero fee', async () => {
+        const { peerNetwork, node } = nodeTest
+        const { wallet, memPool, chain } = node
+        chain.synced = true
+
+        const accountA = await useAccountFixture(wallet, 'accountA')
+        const accountB = await useAccountFixture(wallet, 'accountB')
+
+        // generate an initial posted transaction with a new custom asset
+
+        const asset = new Asset(accountA.spendingKey, 'TestCoin', 'metadata')
+        const mintData = {
+          name: asset.name().toString('utf8'),
+          metadata: asset.metadata().toString('utf8'),
+          value: 10n,
+        }
+
+        const mint1 = await usePostTxFixture({
+          node: node,
+          wallet: node.wallet,
+          from: accountA,
+          mints: [mintData],
+        })
+
+        // add a block with this transaction to register the new asset on chain
+
+        const minerFeeBlock = await useMinerBlockFixture(
+          node.chain, undefined, undefined, undefined,
+          [mint1]
+        )
+        await expect(chain).toAddBlock(minerFeeBlock)
+        await wallet.updateHead()
+
+        // watch for indications that a transaction has been circulated on the network
+
+        const peers = getConnectedPeersWithSpies(peerNetwork.peerManager, 5)
+        const { peer: peerWithTransaction } = peers[0]
+        const peersWithoutTransaction = peers.slice(1)
+
+        const verifyNewTransactionSpy = jest.spyOn(node.chain.verifier, 'verifyNewTransaction')
+        const addPendingTransaction = jest.spyOn(node.wallet, 'addPendingTransaction')
+        const acceptTransaction = jest.spyOn(node.memPool, 'acceptTransaction')
+
+        // create pure mint transaction with no fee
+
+        const mint2 = await createPureMintTransaction(accountA, accountB, asset, 100n)
+
+        // confirm that transaction is not submitted to the network yet
+
+        for (const { peer } of peers) {
+          expect(peer.state.identity).not.toBeNull()
+          peer.state.identity &&
+            expect(peerNetwork.knowsTransaction(mint2.hash(), peer.state.identity)
+              ).toBe(false)
+        }
+
+        // confirm that transaction is not in the node mempool
+
+        expect(memPool.exists(mint2.hash())).toBe(false)
+        expect(acceptTransaction).not.toHaveBeenCalled()
+
+        // receive transaction from network
+
+        await peerNetwork.peerManager.onMessage.emitAsync(
+          peerWithTransaction,
+          new NewTransactionsMessage([mint2]),
+        )
+
+        // confirm other peers have been sent transaction
+
+        for (const { sendSpy } of peersWithoutTransaction) {
+          expect(sendSpy).toHaveBeenCalled()
+        }
+
+        // confirm transaction appears valid
+
+        expect(verifyNewTransactionSpy).toHaveBeenCalledTimes(1)
+        const verificationResult = await verifyNewTransactionSpy.mock.results[0].value
+        expect(verificationResult).toEqual({
+          valid: true,
+        })
+
+        // confirm transaction was added to the mempool
+
+        expect(memPool.exists(mint2.hash())).toBe(true)
+        expect(acceptTransaction).toHaveBeenCalled()
+        expect(addPendingTransaction).toHaveBeenCalled()
+
+        // confirm all peers have the transaction marked
+
+        for (const { peer } of peers) {
+          expect(peer.state.identity).not.toBeNull()
+          peer.state.identity &&
+            expect(peerNetwork.knowsTransaction(mint2.hash(), peer.state.identity)
               ).toBe(true)
         }
       })
